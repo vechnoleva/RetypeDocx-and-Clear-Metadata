@@ -9,7 +9,7 @@ fun main() = application {
     Window(
         onCloseRequest = ::exitApplication,
         title          = "RetypeDocx — Перенабор документа",
-        state          = rememberWindowState(width = 680.dp, height = 360.dp),
+        state          = rememberWindowState(width = 700.dp, height = 580.dp),
         resizable      = true,
     ) {
         App()
