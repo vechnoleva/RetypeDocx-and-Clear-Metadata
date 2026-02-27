@@ -75,7 +75,7 @@ private fun MainScreen(vm: DocxRetypeViewModel) {
                     path     = state.outputPath,
                     onChoose = {
                         val defaultName = if (state.inputPath.isNotEmpty())
-                            "clean_${File(state.inputPath).name}"
+                            "новый_${File(state.inputPath).name}"
                         else
                             "output.docx"
                         showSaveDialog("Сохранить результат как .docx", defaultName)
@@ -113,10 +113,15 @@ private fun MainScreen(vm: DocxRetypeViewModel) {
                             color = MaterialTheme.colorScheme.secondary,
                         )
                     is ProcessingStatus.Success ->
-                        Text(
-                            "Готово! Файл сохранён:\n${s.outputPath}",
-                            color = MaterialTheme.colorScheme.primary,
-                        )
+                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Text(
+                                "Готово! Файл сохранён:\n${s.outputPath}",
+                                color = MaterialTheme.colorScheme.primary,
+                            )
+                            OutlinedButton(onClick = { openFileInDefaultApp(s.outputPath) }) {
+                                Text("Открыть созданный файл")
+                            }
+                        }
                     is ProcessingStatus.Error   ->
                         Text(
                             "Ошибка: ${s.message}",
@@ -358,6 +363,19 @@ private fun showOpenDialog(title: String): String? {
     val dir  = dialog.directory ?: return null
     val file = dialog.file       ?: return null
     return File(dir, file).absolutePath
+}
+
+/**
+ * Opens [filePath] in the OS default application.
+ * java.awt.Desktop.open() handles macOS (Finder/Preview/Pages),
+ * Windows (Explorer/Word) and Linux (xdg-open) automatically — no OS detection needed.
+ */
+private fun openFileInDefaultApp(filePath: String) {
+    try {
+        java.awt.Desktop.getDesktop().open(File(filePath))
+    } catch (_: Exception) {
+        // Non-critical: file was already saved successfully, opening is a bonus
+    }
 }
 
 /**

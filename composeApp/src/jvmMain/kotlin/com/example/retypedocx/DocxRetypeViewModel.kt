@@ -76,6 +76,6 @@ class DocxRetypeViewModel(
     private fun buildOutputPath(inputPath: String): String {
         if (inputPath.isEmpty()) return ""
         val f = File(inputPath)
-        return File(f.parentFile, "clean_${f.name}").absolutePath
+        return File(f.parentFile, "новый_${f.name}").absolutePath
     }
 }
