@@ -2,9 +2,16 @@ package com.example.retypedocx
 
 import org.apache.poi.xwpf.usermodel.XWPFDocument
 import org.apache.poi.xwpf.usermodel.XWPFParagraph
+import org.apache.poi.xwpf.usermodel.XWPFStyle
 import org.apache.poi.xwpf.usermodel.XWPFTable
+import org.openxmlformats.schemas.wordprocessingml.x2006.main.CTString
+import org.openxmlformats.schemas.wordprocessingml.x2006.main.CTStyle
+import org.openxmlformats.schemas.wordprocessingml.x2006.main.STJc
+import org.openxmlformats.schemas.wordprocessingml.x2006.main.STLineSpacingRule
+import org.openxmlformats.schemas.wordprocessingml.x2006.main.STStyleType
 import java.io.FileInputStream
 import java.io.FileOutputStream
+import java.math.BigInteger
 import java.nio.file.Path
 import java.time.ZoneId
 import java.util.Date
@@ -32,12 +39,13 @@ class DocxRetypingServiceImpl : DocxRetypingService {
 
         // New document from scratch — no styles, no metadata from source
         val outputDoc = XWPFDocument()
+        applyStyles(outputDoc)
 
         try {
             // bodyElements preserves the original order of paragraphs and tables
             for (element in sourceDoc.bodyElements) {
                 when (element) {
-                    is XWPFParagraph -> copyParagraph(element, outputDoc)
+                    is XWPFParagraph -> copyParagraph(element, outputDoc, sourceDoc)
                     is XWPFTable     -> copyTable(element, outputDoc)
                     // Other element types (SDT, etc.) are silently skipped
                 }
@@ -54,6 +62,86 @@ class DocxRetypingServiceImpl : DocxRetypingService {
             sourceDoc.close()
             outputDoc.close()
         }
+    }
+
+    // ── Styles ─────────────────────────────────────────────────────────────────
+
+    /**
+     * Defines two paragraph styles in [doc]:
+     *  • "Normal"   — Times New Roman 14pt, justified, 1.25cm first-line indent, 1.5× spacing
+     *  • "Heading1" — Times New Roman 14pt bold, centered, 0 indent, 1.5× spacing
+     *
+     * All spacing values are in twips (1/20 pt). Font sizes are in half-points.
+     * Explicit Java setter calls are used throughout to avoid Kotlin K2 issues.
+     */
+    private fun applyStyles(doc: XWPFDocument) {
+        val styles = doc.createStyles()
+
+        // ── Normal (default paragraph style) ───────────────────────────────
+        val normalCT = CTStyle.Factory.newInstance().apply {
+            setType(STStyleType.PARAGRAPH)
+            setStyleId("Normal")
+            setDefault(true)
+            val nm = CTString.Factory.newInstance(); nm.setVal("Normal"); setName(nm)
+
+            val pPr = addNewPPr()
+            pPr.addNewJc().setVal(STJc.BOTH)               // justified
+            pPr.addNewSpacing().also { sp ->
+                sp.setLineRule(STLineSpacingRule.AUTO)
+                sp.setLine(BigInteger.valueOf(360))         // 1.5× (240 = single)
+                sp.setBefore(BigInteger.ZERO)
+                sp.setAfter(BigInteger.ZERO)
+            }
+            pPr.addNewInd().also { ind ->
+                ind.setFirstLine(BigInteger.valueOf(709))   // 1.25 cm ≈ 709 twips
+                ind.setLeft(BigInteger.ZERO)
+                ind.setRight(BigInteger.ZERO)
+            }
+
+            val rPr = addNewRPr()
+            rPr.addNewRFonts().also { f ->
+                f.setAscii("Times New Roman")
+                f.setHAnsi("Times New Roman")
+                f.setCs("Times New Roman")
+            }
+            rPr.addNewSz().setVal(BigInteger.valueOf(28))   // 14pt = 28 half-pts
+            rPr.addNewSzCs().setVal(BigInteger.valueOf(28))
+            // No <w:b> → regular weight
+        }
+        styles.addStyle(XWPFStyle(normalCT, styles))
+
+        // ── Heading 1 ──────────────────────────────────────────────────────
+        val heading1CT = CTStyle.Factory.newInstance().apply {
+            setType(STStyleType.PARAGRAPH)
+            setStyleId("Heading1")
+            val nm = CTString.Factory.newInstance(); nm.setVal("heading 1"); setName(nm)
+
+            val pPr = addNewPPr()
+            pPr.addNewJc().setVal(STJc.CENTER)             // centered
+            pPr.addNewSpacing().also { sp ->
+                sp.setLineRule(STLineSpacingRule.AUTO)
+                sp.setLine(BigInteger.valueOf(360))         // 1.5×
+                sp.setBefore(BigInteger.ZERO)
+                sp.setAfter(BigInteger.ZERO)
+            }
+            pPr.addNewInd().also { ind ->                  // explicit zero indent
+                ind.setFirstLine(BigInteger.ZERO)
+                ind.setLeft(BigInteger.ZERO)
+                ind.setRight(BigInteger.ZERO)
+            }
+
+            val rPr = addNewRPr()
+            rPr.addNewRFonts().also { f ->
+                f.setAscii("Times New Roman")
+                f.setHAnsi("Times New Roman")
+                f.setCs("Times New Roman")
+            }
+            rPr.addNewSz().setVal(BigInteger.valueOf(28))   // 14pt
+            rPr.addNewSzCs().setVal(BigInteger.valueOf(28))
+            rPr.addNewB()                                   // bold
+            rPr.addNewBCs()                                 // bold for complex scripts
+        }
+        styles.addStyle(XWPFStyle(heading1CT, styles))
     }
 
     // ── Metadata ───────────────────────────────────────────────────────────────
@@ -112,13 +200,47 @@ class DocxRetypingServiceImpl : DocxRetypingService {
 
     // ── Paragraph ─────────────────────────────────────────────────────────────
 
-    private fun copyParagraph(source: XWPFParagraph, doc: XWPFDocument) {
-        val text    = source.text  // XWPFParagraph.getText() — concatenates all runs
+    private fun copyParagraph(source: XWPFParagraph, doc: XWPFDocument, sourceDoc: XWPFDocument) {
+        val text    = source.text
         val newPara = doc.createParagraph()
+
+        val mappedId = mapStyleId(source.styleID, sourceDoc)
+        if (mappedId != null) newPara.setStyle(mappedId)
+
         if (text.isNotEmpty()) {
             newPara.createRun().setText(text)
         }
-        // Empty paragraphs are kept above to preserve blank lines between sections
+    }
+
+    /**
+     * Resolves a source style ID to an output style ID.
+     *
+     * Strategy:
+     *  1. If empty/null → null (paragraph inherits default = Normal).
+     *  2. If ID directly matches one of our defined styles → use it as-is.
+     *  3. Otherwise look up the style **name** in the source document (handles
+     *     localised IDs, e.g. Russian Word uses "1" as the ID for "Заголовок 1").
+     *     Map normalised names to our output style IDs.
+     *  4. Fallback → keep the original ID (Word will use its own built-in or skip).
+     */
+    private fun mapStyleId(sourceId: String?, sourceDoc: XWPFDocument): String? {
+        if (sourceId.isNullOrEmpty()) return null
+
+        // Fast path: ID already matches one of our defined styles
+        if (sourceId == "Normal" || sourceId == "Heading1") return sourceId
+
+        // Look up the style name in the source document
+        val name = try {
+            sourceDoc.styles?.getStyle(sourceId)?.name?.trim()?.lowercase()
+        } catch (_: Exception) { null }
+
+        return when (name) {
+            "normal", "обычный", "default paragraph font" -> "Normal"
+            "heading 1", "заголовок 1"                   -> "Heading1"
+            "heading 2", "заголовок 2"                   -> "Heading2"
+            "heading 3", "заголовок 3"                   -> "Heading3"
+            else                                          -> sourceId
+        }
     }
 
     // ── Table ──────────────────────────────────────────────────────────────────
